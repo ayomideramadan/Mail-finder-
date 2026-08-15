@@ -3,19 +3,27 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import re
-import json
+import easyocr
+import numpy as np
+from PIL import Image
 
 st.set_page_config(page_title="Ramadan Ayomide", layout="wide")
 
 st.title("📚 Ramadan Ayomide - Ultimate AI Author Email Finder")
-st.write("Upload a book cover photo or enter an author name to instantly extract emails via AI.")
+st.write("Upload a book cover photo or enter an author name to instantly extract emails via local AI scanning.")
 
-# Advanced deep scraping function
+# Initialize the local AI Reader (cached so it only loads once)
+@st.cache_resource
+def load_ocr_reader():
+    return easyocr.Reader(['en'], gpu=False)
+
+reader = load_ocr_reader()
+
 def deep_search_author(search_term):
-    if not search_term or "Screenshot" in search_term:
-        return "Invalid Input", "Please provide a valid author name."
+    if not search_term or len(search_term.strip()) < 3:
+        return "Invalid Input", "Search query too short."
     try:
-        query = f'"{search_term}" author email contact'
+        query = f'"{search_term.strip()}" author email contact'
         url = f"https://google.com{query.replace(' ', '+')}"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         
@@ -29,38 +37,16 @@ def deep_search_author(search_term):
             clean_emails = [e for e in emails if not e.endswith(('.png', '.jpg', '.jpeg', '.gif', '.css', '.js'))]
             
             if clean_emails:
-                return "AI Core Search", ", ".join(clean_emails)
+                return "AI Local Core Search", ", ".join(clean_emails)
                 
             for link in soup.find_all('a'):
                 href = link.get('href', '')
                 if "url?q=" in href and "google.com" not in href:
                     clean_url = href.split("url?q=")[1].split("&")[0]
-                    return clean_url, "Direct email hidden. Link provided for manual form contact."
+                    return clean_url, "Direct email hidden. Link provided for manual contact form."
     except:
         pass
-    return "Global Directory Match", "contact@domain.com (Sample format - check link)"
-
-# Advanced OCR to read text from image pixels using a reliable cloud OCR engine
-def extract_text_from_image(uploaded_file):
-    try:
-        # Utilizing a high-speed public OCR engine to extract actual text from image pixels
-        img_bytes = uploaded_file.read()
-        url = "https://ocr.space"
-        payload = {"apikey": "dontsharethiskey_helloworld", "language": "eng"}
-        files = {"file": (uploaded_file.name, img_bytes, uploaded_file.type)}
-        
-        response = requests.post(url, data=payload, files=files, timeout=15)
-        result = response.json()
-        
-        if result.get("ParsedResults"):
-            extracted_text = result["ParsedResults"][0].get("ParsedText", "").strip()
-            # Clean up text lines to single out author-like elements
-            lines = [line.strip() for line in extracted_text.split('\n') if len(line.strip()) > 3]
-            if lines:
-                return lines[0] # Takes the most prominent title/author name found on the cover
-    except:
-        pass
-    return None
+    return "Global Match", f"No public email found for '{search_term}'. Check manual records."
 
 if 'results' not in st.session_state:
     st.session_state.results = []
@@ -73,19 +59,33 @@ if uploaded_file is not None:
     st.image(uploaded_file, caption="Uploaded Book Cover", width=200)
     
     if st.button("🤖 Analyze Cover with AI"):
-        with st.spinner("AI is analyzing image pixels and reading text..."):
-            extracted_name = extract_text_from_image(uploaded_file)
-            
-            if extracted_name:
-                st.success(f"🔍 AI Successfully Read Cover Text: **{extracted_name}**")
-                source, email = deep_search_author(extracted_name)
-                st.session_state.results.append({
-                    "Author/Book Name": extracted_name,
-                    "Official Source": source,
-                    "Email Address": email
-                })
-            else:
-                st.error("AI could not cleanly read the text. Please try typing it manually below.")
+        with st.spinner("AI engine is scanning image pixels directly..."):
+            try:
+                # Convert the uploaded image file to an array the local AI can read
+                image = Image.open(uploaded_file)
+                img_array = np.array(image)
+                
+                # Run local pixel scanning
+                ocr_results = reader.readtext(img_array, detail=0)
+                
+                # Filter out numbers/short gibberish, keep words that look like titles/names
+                valid_words = [word.strip() for word in ocr_results if len(word.strip()) > 3 and not word.strip().isdigit()]
+                
+                if valid_words:
+                    # Join detected strings into a combined search phrase
+                    detected_text = " ".join(valid_words[:4]) 
+                    st.success(f"🔍 AI Successfully Read Text from Cover: **{detected_text}**")
+                    
+                    source, email = deep_search_author(detected_text)
+                    st.session_state.results.append({
+                        "Author/Book Name": detected_text,
+                        "Official Source": source,
+                        "Email Address": email
+                    })
+                else:
+                    st.error("AI scanned the image but couldn't find distinct letters. Try typing it manually below.")
+            except Exception as e:
+                st.error("AI scanning error. Please use the manual text box below.")
 
 st.markdown("---")
 
